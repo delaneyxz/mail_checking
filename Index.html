@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        :root { --black: #000; --dark-grey: #111; --border: #333; --white: #fff; }
+        body { background: var(--black); color: var(--white); font-family: sans-serif; margin: 0; }
+        .container { padding: 20px; }
+        .card { background: var(--dark-grey); border: 1px solid var(--border); padding: 15px; border-radius: 5px; margin-bottom: 10px; }
+        
+        /* Tabs */
+        .tab-bar { display: flex; gap: 5px; overflow-x: auto; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+        .tab { padding: 8px 15px; cursor: pointer; background: #222; font-size: 12px; border: 1px solid var(--border); }
+        .tab.active { background: var(--white); color: var(--black); font-weight: bold; }
+
+        /* Table */
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+        th, td { border: 1px solid var(--border); padding: 10px; text-align: left; }
+        th { background: #0a0a0a; }
+        input.edit-box { background: #222; color: #fff; border: 1px solid #444; width: 90%; padding: 4px; }
+        
+        /* Buttons */
+        .btn-copy { background: #444; color: #fff; border: none; padding: 3px 7px; cursor: pointer; font-size: 10px; }
+        .btn-submit { background: var(--white); color: var(--black); border: none; padding: 5px 15px; cursor: pointer; font-weight: bold; }
+        
+        #login-form { max-width: 300px; margin: 100px auto; text-align: center; }
+        .nav { display: flex; justify-content: space-between; align-items: center; padding: 10px 20px; background: #0a0a0a; border-bottom: 1px solid #222; }
+    </style>
+</head>
+<body>
+
+<div id="login-screen">
+    <div id="login-form" class="card">
+        <h2>Panel Login</h2>
+        <input type="text" id="user" placeholder="Username" style="width:90%; padding:10px; margin:5px; background:#222; color:#fff; border:1px solid #444;"><br>
+        <input type="password" id="pass" placeholder="Password" style="width:90%; padding:10px; margin:5px; background:#222; color:#fff; border:1px solid #444;"><br>
+        <button onclick="login()" class="btn-submit" style="margin-top:10px; width:95%;">Enter</button>
+    </div>
+</div>
+
+<div id="app-screen" style="display:none;">
+    <div class="nav">
+        <span id="display-user"></span>
+        <button onclick="logout()" style="background:red; color:white; border:none; padding:5px 10px; cursor:pointer;">Logout</button>
+    </div>
+
+    <div class="container">
+        <div id="admin-panel" style="display:none;">
+            <h3>Admin Overview (Real-time Stats)</h3>
+            <div id="stats-container" class="card">Loading Stats...</div>
+            <hr border="1" color="#222">
+        </div>
+
+        <div class="tab-bar" id="tabs"></div>
+        <div id="table-container" style="overflow-x: auto;">
+            <p>Select a sheet to start working...</p>
+        </div>
+    </div>
+</div>
+
+<script>
+let session = { user: "", role: "" };
+
+window.onload = () => {
+    const saved = localStorage.getItem('gs_session');
+    if(saved) {
+        session = JSON.parse(saved);
+        showUI();
+    }
+}
+
+function login() {
+    const u = document.getElementById('user').value;
+    const p = document.getElementById('pass').value;
+    google.script.run.withSuccessHandler(res => {
+        if(res.success) {
+            session = { user: res.user, role: res.role };
+            localStorage.setItem('gs_session', JSON.stringify(session));
+            showUI();
+        } else { alert("Invalid login or not approved!"); }
+    }).checkLogin(u, p);
+}
+
+function showUI() {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app-screen').style.display = 'block';
+    document.getElementById('display-user').innerText = "Logged in as: " + session.user;
+    
+    if(session.role === 'Admin') {
+        document.getElementById('admin-panel').style.display = 'block';
+        loadStats();
+    }
+    loadTabs();
+}
+
+function loadStats() {
+    google.script.run.withSuccessHandler(stats => {
+        let h = "<table><tr><th>Username</th><th>Total Submits</th></tr>";
+        for(let u in stats) {
+            h += `<tr><td>${u}</td><td>${stats[u]}</td></tr>`;
+        }
+        h += "</table>";
+        document.getElementById('stats-container').innerHTML = h;
+    }).getUserStats();
+}
+
+function loadTabs() {
+    google.script.run.withSuccessHandler(tabs => {
+        let html = '';
+        tabs.forEach(t => html += `<div class="tab" onclick="loadSheetData('${t}', this)">${t}</div>`);
+        document.getElementById('tabs').innerHTML = html;
+    }).getTabs();
+}
+
+function loadSheetData(name, el) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    el.classList.add('active');
+    document.getElementById('table-container').innerHTML = "Loading data...";
+
+    google.script.run.withSuccessHandler(data => {
+        let h = `<table><tr>`;
+        data[0].forEach(col => h += `<th>${col}</th>`);
+        h += `<th>Status</th><th>Action</th></tr>`;
+
+        for(let i=1; i<data.length; i++) {
+            h += `<tr>`;
+            data[i].forEach((cell, j) => {
+                // A(0), C(2), E(4), F(5) editable
+                if([0, 2, 4, 5].includes(j)) {
+                    h += `<td><input type="text" class="edit-box" id="r-${i}-c-${j}" value="${cell}"></td>`;
+                } else {
+                    h += `<td>${cell} <button class="btn-copy" onclick="copyText('${cell}')">Copy</button></td>`;
+                }
+            });
+            h += `<td>
+                <select id="status-${i}" style="background:#222; color:#fff;">
+                    <option value="DONE">DONE</option>
+                    <option value="No Activity">No Activity</option>
+                    <option value="Problems">Problems</option>
+                </select>
+            </td>`;
+            h += `<td><button class="btn-submit" onclick="submitRow(${i}, '${name}', ${data[i].length})">Submit</button></td></tr>`;
+        }
+        h += `</table>`;
+        document.getElementById('table-container').innerHTML = h;
+    }).getSheetData(name);
+}
+
+function submitRow(rowIdx, sheetName, colCount) {
+    let rowData = [];
+    for(let j=0; j<colCount; j++) {
+        let val = document.getElementById(`r-${rowIdx}-c-${j}`) ? document.getElementById(`r-${rowIdx}-c-${j}`).value : "";
+        if(!val) { // Non-editable columns
+           let cells = document.querySelectorAll('tr')[rowIdx].querySelectorAll('td');
+           val = cells[j].innerText.replace("Copy", "").trim();
+        }
+        rowData.push(val);
+    }
+    const status = document.getElementById(`status-${rowIdx}`).value;
+    
+    google.script.run.withSuccessHandler(() => {
+        alert("Submitted Successfully!");
+        location.reload(); // রিলোড দিয়ে ডাটা আপডেট
+    }).processSubmission(rowIdx, sheetName, status, session.user, rowData);
+}
+
+function copyText(txt) {
+    navigator.clipboard.writeText(txt);
+    alert("Copied: " + txt);
+}
+
+function logout() {
+    localStorage.removeItem('gs_session');
+    location.reload();
+}
+</script>
+</body>
+</html>
